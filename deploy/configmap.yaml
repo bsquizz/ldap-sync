@@ -1,0 +1,40 @@
+# Non-secret config. Fill in your real urls/bases/filters before applying.
+# Secret VALUES come from the Secret (envFrom in the CronJob) via ${VAR} expansion.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ldap-sync
+data:
+  config.yaml: |
+    source:
+      url: ldaps://source.example.com:636
+      search_base: ou=users,dc=src,dc=com
+      user_filter: "(&(uid=*)(memberOf=cn=app-users,ou=groups,dc=src,dc=com))"
+      auth:
+        method: simple
+        bind_dn: ${SRC_BIND_DN}
+        bind_password: ${SRC_BIND_PASSWORD}
+      verify: true
+    target:
+      url: ldaps://rhds.example.com:636
+      base_dn: ou=people,dc=tgt,dc=com
+      rdn_attr: uid
+      object_classes: [top, person, organizationalPerson, inetOrgPerson, rhatPerson]
+      entry_filter: "(objectClass=inetOrgPerson)"
+      auth:
+        method: simple
+        bind_dn: ${TGT_BIND_DN}
+        bind_password: ${TGT_BIND_PASSWORD}
+      verify: true
+    sync:
+      mappings:
+        uid: uid
+        givenName: givenName
+        sn: sn
+        cn: cn
+        mail: mail
+        rhatUUID: rhatUUID         # target RHDS must have rhatPerson/rhatUUID schema; see README
+      exclude_users:
+        - admin
+      leaver_action: delete
+      dry_run: false

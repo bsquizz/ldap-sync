@@ -1,0 +1,61 @@
+# ldap-sync configuration (generic example).
+# Secret VALUES never live here -- ${VAR} is expanded from the environment (a Kubernetes
+# Secret in the pod, or exported vars locally). A referenced-but-unset var is a hard error.
+
+source:                           # the LDAP we READ from
+  url: ldaps://source.example.com:636
+  search_base: ou=users,dc=src,dc=com
+  # Which source users belong in the target. Narrow this to your authoritative group.
+  # (uid=*) alone copies everyone the bind account can see -- see README caveats.
+  user_filter: "(&(uid=*)(memberOf=cn=app-users,ou=groups,dc=src,dc=com))"
+  auth:
+    method: simple               # simple | gssapi
+    bind_dn: ${SRC_BIND_DN}              # simple only
+    bind_password: ${SRC_BIND_PASSWORD}  # simple only
+    # gssapi uses the ambient Kerberos ticket/keytab; omit bind_dn/bind_password.
+  verify: true                   # verify source TLS cert
+
+target:                           # the LDAP we WRITE to (any directory: 389-ds/RHDS, OpenLDAP, ...)
+  url: ldaps://target.example.com:636
+  # The container this tool owns EXCLUSIVELY. Every entry under it matching entry_filter is
+  # managed; a user present here but gone from the source is a leaver. Do NOT point this at a
+  # container that also holds manually-managed entries -- they would be treated as leavers.
+  base_dn: ou=people,dc=tgt,dc=com
+  rdn_attr: uid                  # RDN attribute for created entries; must be a mapping target
+  object_classes:                # objectClasses stamped on created entries (mirrors the source)
+    - top
+    - person
+    - organizationalPerson
+    - inetOrgPerson
+    - rhatPerson                 # defines rhatUUID -- target RHDS MUST have this schema loaded
+  entry_filter: "(objectClass=inetOrgPerson)"   # which entries under base_dn are "ours"
+  auth:
+    method: simple
+    bind_dn: ${TGT_BIND_DN}
+    bind_password: ${TGT_BIND_PASSWORD}
+  verify: true                   # verify target TLS cert
+
+sync:
+  # source_attr: target_attr  (source -> destination). Usually identity; rename where schemas
+  # differ. person/inetOrgPerson REQUIRE cn and sn -- both are mapped below.
+  mappings:
+    uid: uid                     # required join key / RDN attribute
+    givenName: givenName
+    sn: sn
+    cn: cn
+    mail: mail
+    # rhatUUID is a Red Hat custom attribute (defined by the rhatPerson objectClass above).
+    # Kept native; the target RHDS must have the rhatUUID/rhatPerson schema loaded or every
+    # create fails with an attribute/objectClass violation. Do NOT reuse employeeNumber -- on a
+    # real entry that is a separate attribute (the actual employee number). See README.
+    rhatUUID: rhatUUID
+  exclude_users:                 # by RDN value; never created/updated/disabled/deleted
+    - admin
+  leaver_action: delete          # delete | disable
+  # For leaver_action: disable -- how a leaver is locked and a returning user re-enabled.
+  # Defaults suit 389-ds/RHDS (nsAccountLock: TRUE/FALSE). For another directory, override, e.g.
+  # OpenLDAP ppolicy uses pwdAccountLockedTime. Comparison against lock_value is case-insensitive.
+  lock_attr: nsAccountLock       # attribute written to lock a leaver
+  lock_value: "TRUE"             # value meaning "locked"
+  unlock_value: "FALSE"          # value written back to re-enable a returning user
+  dry_run: false

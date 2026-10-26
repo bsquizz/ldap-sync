@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ldap-sync
+spec:
+  schedule: "23 * * * *"            # hourly at :23 (offset off the :00 stampede)
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Fits steady-state runs. The ONE-TIME initial import of all users can take much longer
+      # and would be killed here -- run that import manually or raise this temporarily for the
+      # first run. See README "Initial import".
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: sync
+              image: ghcr.io/bsquizz/ldap-sync:latest   # replace with your built image
+              args: ["--config", "/etc/sync/config.yaml"]
+              envFrom:
+                - secretRef:
+                    name: ldap-sync
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/sync
+                  readOnly: true
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi    # holds both user sets in memory at whole-company scale
+          volumes:
+            - name: config
+              configMap:
+                name: ldap-sync
