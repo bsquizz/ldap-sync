@@ -160,12 +160,26 @@ def connect_ldap(section: dict):
 
 
 def _paged(conn, base, flt, attributes, page=500):
+    # ldap3 paged_search stops SILENTLY on a server-side limit (adminLimitExceeded /
+    # sizeLimitExceeded / timeLimitExceeded), yielding a TRUNCATED set -- and acting on a
+    # partial view is unsafe (fetch_target would try to re-create the entries it never saw).
+    # So after the generator drains, fail loud unless the final search result was success.
+    # (Seen live: 389-ds caps a non-root bind at lookthroughlimit=5000; raise the bind
+    # account's nsSizeLimit / nsLookThroughLimit / nsTimeLimit.)
     for entry in conn.extend.standard.paged_search(
         search_base=base, search_filter=flt, attributes=attributes,
         paged_size=page, generator=True,
     ):
         if entry.get("type") == "searchResEntry":
             yield entry
+    res = conn.result or {}
+    if res.get("result") not in (0, None):
+        raise RuntimeError(
+            f"LDAP search under {base!r} returned incomplete results "
+            f"(code {res.get('result')}: {res.get('description')}); refusing to act on a "
+            f"truncated set -- raise the bind account's server-side search limits "
+            f"(389-ds nsSizeLimit / nsLookThroughLimit / nsTimeLimit)."
+        )
 
 
 def fetch_source(conn, cfg: dict) -> dict:

@@ -132,9 +132,12 @@ def test_protected_users_untouched():
     assert plan == {"creates": [], "updates": [], "leavers": []}
 
 
-def _fake_conn(entries):
+def _fake_conn(entries, result_code=0):
     std = types.SimpleNamespace(paged_search=lambda **kw: iter(entries))
-    return types.SimpleNamespace(extend=types.SimpleNamespace(standard=std))
+    return types.SimpleNamespace(
+        extend=types.SimpleNamespace(standard=std),
+        result={"result": result_code, "description": "test"},
+    )
 
 
 def test_fetch_source_keys_by_lowercase_rdn():
@@ -148,6 +151,20 @@ def test_fetch_source_keys_by_lowercase_rdn():
     assert set(desired) == {"mixedcase1"}
     assert desired["mixedcase1"][0] == "MixedCase1"  # original case preserved for the DN
     assert desired["mixedcase1"][1]["mail"] == ["MixedCase1@example.com"]
+
+
+def test_paged_aborts_on_truncated_result():
+    # A non-zero final search result (e.g. adminLimitExceeded=11) means the paged read was
+    # truncated by a server limit; refuse rather than act on a partial view.
+    cfg = {"source": {"search_base": "ou=x", "user_filter": "(uid=*)"},
+           "target": {"rdn_attr": RDN}, "sync": CFG_SYNC}
+    entries = [{"type": "searchResEntry", "attributes": _src("jdoe")}]
+    try:
+        fetch_source(_fake_conn(entries, result_code=11), cfg)
+    except RuntimeError as e:
+        assert "incomplete" in str(e).lower()
+    else:
+        raise AssertionError("expected RuntimeError on truncated (adminLimitExceeded) read")
 
 
 if __name__ == "__main__":
